@@ -1,0 +1,34 @@
+# Builds pdf-inspector's own Python wheel (Windows x64) at any ref, so
+# Garrison can compare extraction output between commits without a local
+# Rust toolchain. The upstream workflows are disabled on this fork.
+name: Garrison probe wheel
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit, branch or tag to build
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  wheel:
+    name: Wheel (${{ inputs.ref }})
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: PyO3/maturin-action@v1
+        with:
+          args: --release --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ inputs.ref }}
+          path: dist/*.whl
+          if-no-files-found: error
