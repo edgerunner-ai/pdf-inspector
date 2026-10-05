@@ -3664,8 +3664,7 @@ mod tests {
         // integer mid-page is content; one by the page's bottom edge is a
         // folio.
         let doc = Document::with_version("1.7");
-        let rotations: PageRotations =
-            HashMap::from([(1, geometry::PageRotation::Ccw)]);
+        let rotations: PageRotations = HashMap::from([(1, geometry::PageRotation::Ccw)]);
         let mut mid_page = make_merge_item("1630", 300.0, 24.0);
         mid_page.y = -300.0;
         let mut bottom_edge = make_merge_item("7", 300.0, 6.0);
@@ -3681,10 +3680,8 @@ mod tests {
         assert_eq!(kept[0].y, -300.0, "returned items keep their coordinates");
 
         // Without the frame, the whole page reads as bottom margin.
-        let (kept, _, _) = filter_markdown_page_numbers_with_removed_pages(
-            vec![mid_page, bottom_edge],
-            1,
-        );
+        let (kept, _, _) =
+            filter_markdown_page_numbers_with_removed_pages(vec![mid_page, bottom_edge], 1);
         assert!(kept.is_empty());
     }
 
