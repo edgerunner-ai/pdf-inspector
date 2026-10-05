@@ -1,0 +1,27 @@
+# Tests for the garrison branch on GitHub-hosted runners (the upstream CI
+# needs Firecrawl's Blacksmith runners and is disabled on this fork). The
+# toolchain comes from rust-toolchain.toml.
+name: Garrison tests
+
+on:
+  push:
+    branches: [garrison]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test
+        run: cargo test --locked
+      - name: cargo clippy
+        if: always()
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: cargo fmt
+        if: always()
+        run: cargo fmt --all -- --check

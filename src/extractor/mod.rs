@@ -132,6 +132,7 @@ pub(crate) use fonts::FontStyleCache;
 pub(crate) use layout::detect_columns;
 #[cfg(test)]
 use layout::filter_markdown_page_numbers;
+pub(crate) use layout::filter_markdown_page_numbers_in_page_frames;
 pub(crate) use layout::filter_markdown_page_numbers_with_removed_pages;
 pub(crate) use layout::group_into_lines_with_thresholds;
 pub(crate) use layout::group_prefiltered_items_into_lines_with_thresholds_and_charts;
@@ -3610,6 +3611,81 @@ mod tests {
 
         assert_eq!(lines.len(), 3);
         assert!(lines.iter().all(|line| line.text() == "Page"));
+    }
+
+    #[test]
+    fn numeric_table_rows_in_the_page_margin_keep_their_cells() {
+        // A data row in the bottom band: its columns are wider than the
+        // folio context gap, so each short integer stands alone.
+        let cells = [
+            ("WP1", 25.0, 20.0),
+            ("43.5", 80.0, 22.0),
+            ("51", 130.0, 12.0),
+            ("39", 170.0, 12.0),
+            ("1630", 210.0, 24.0),
+            ("50.1", 270.0, 22.0),
+        ];
+        let items = cells
+            .iter()
+            .map(|&(text, x, width)| {
+                let mut item = make_merge_item(text, x, width);
+                item.y = 50.0;
+                item
+            })
+            .collect();
+
+        let filtered = filter_markdown_page_numbers(items, 1);
+
+        let texts: Vec<&str> = filtered.iter().map(|item| item.text.as_str()).collect();
+        assert_eq!(texts, ["WP1", "43.5", "51", "39", "1630", "50.1"]);
+    }
+
+    #[test]
+    fn folio_in_a_running_footer_row_is_still_removed() {
+        let mut chapter = make_merge_item("Chapter", 25.0, 40.0);
+        chapter.y = 50.0;
+        let mut number = make_merge_item("3", 70.0, 6.0);
+        number.y = 50.0;
+        let mut title = make_merge_item("Operations", 200.0, 60.0);
+        title.y = 50.0;
+        let mut folio = make_merge_item("42", 560.0, 12.0);
+        folio.y = 50.0;
+
+        let filtered = filter_markdown_page_numbers(vec![chapter, number, title, folio], 1);
+
+        let texts: Vec<&str> = filtered.iter().map(|item| item.text.as_str()).collect();
+        assert_eq!(texts, ["Chapter", "3", "Operations"]);
+    }
+
+    #[test]
+    fn counter_clockwise_turned_page_is_judged_in_its_own_frame() {
+        // A turned page's user-space lines sit at y ∈ [-612, 0] (Letter box,
+        // no pages in the document, so the Letter fallback applies). A lone
+        // integer mid-page is content; one by the page's bottom edge is a
+        // folio.
+        let doc = Document::with_version("1.7");
+        let rotations: PageRotations =
+            HashMap::from([(1, geometry::PageRotation::Ccw)]);
+        let mut mid_page = make_merge_item("1630", 300.0, 24.0);
+        mid_page.y = -300.0;
+        let mut bottom_edge = make_merge_item("7", 300.0, 6.0);
+        bottom_edge.y = -600.0;
+
+        let (kept, _, _) = layout::filter_markdown_page_numbers_in_page_frames(
+            vec![mid_page.clone(), bottom_edge.clone()],
+            1,
+            Some((&doc, &rotations)),
+        );
+        let texts: Vec<&str> = kept.iter().map(|item| item.text.as_str()).collect();
+        assert_eq!(texts, ["1630"]);
+        assert_eq!(kept[0].y, -300.0, "returned items keep their coordinates");
+
+        // Without the frame, the whole page reads as bottom margin.
+        let (kept, _, _) = filter_markdown_page_numbers_with_removed_pages(
+            vec![mid_page, bottom_edge],
+            1,
+        );
+        assert!(kept.is_empty());
     }
 
     #[test]

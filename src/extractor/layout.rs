@@ -1124,6 +1124,11 @@ const PAGE_NUMBER_Y_TOLERANCE: f32 = 3.0;
 const PAGE_NUMBER_CONTEXT_GAP_EM: f32 = 1.5;
 const PAGE_NUMBER_BOTTOM_Y: f32 = 100.0;
 const PAGE_NUMBER_TOP_Y: f32 = 720.0;
+/// A margin row with at least this many separate groups, of which at least
+/// `TABULAR_ROW_MIN_NUMERIC_GROUPS` are numeric, is a table row: its short
+/// integers are cell values, not folios, however wide the column gaps.
+const TABULAR_ROW_MIN_GROUPS: usize = 4;
+const TABULAR_ROW_MIN_NUMERIC_GROUPS: usize = 3;
 const SPREAD_MIN_CONTENT_WIDTH_EM: f32 = 40.0;
 const SPREAD_EDGE_FRACTION: f32 = 0.25;
 const ADJACENT_PAGE_MIN_CONTENT_WIDTH_EM: f32 = 26.0;
@@ -1527,6 +1532,7 @@ fn page_number_context_masks(
 
         for mut row in rows {
             row.sort_by(|&left, &right| items[left].x.total_cmp(&items[right].x));
+            let tabular_row = is_tabular_page_number_row(items, &row);
             let mut start = 0;
             while start < row.len() {
                 let mut end = start + 1;
@@ -1588,7 +1594,8 @@ fn page_number_context_masks(
                             .all(|character| character.is_numeric())
                 });
                 let has_dense_numeric_context = numeric_item_count >= 3 && has_long_integer;
-                let has_context = has_lexical_context
+                let has_context = tabular_row
+                    || has_lexical_context
                     || has_structured_numeric_context
                     || has_dense_numeric_context;
                 let has_candidate = row[start..end]
@@ -1695,7 +1702,8 @@ fn page_number_context_masks(
                             // candidate sits between them and the text.
                             let implausible_folio_with_lexical_context =
                                 value > max_plausible_folio && has_lexical_context;
-                            contextual[index] = adjacent_context
+                            contextual[index] = tabular_row
+                                || adjacent_context
                                 || has_dense_numeric_context
                                 || implausible_folio_with_lexical_context;
                             let previous = position
@@ -1754,6 +1762,46 @@ fn page_number_context_masks(
     );
 
     (contextual, explicit_folio)
+}
+
+/// Whether a margin row (items sorted by x) reads as a numeric table row.
+///
+/// Folio context is otherwise decided per gap-separated group, and table
+/// columns are routinely wider than `PAGE_NUMBER_CONTEXT_GAP_EM`: a short
+/// integer cell (`51`, `1630`) then forms a group of its own and looked like
+/// a standalone page number whenever its row sat in the top or bottom band.
+/// A folio line holds one number beside, at most, a label or running title,
+/// so several separate groups that are mostly numeric mean data.
+fn is_tabular_page_number_row(items: &[TextItem], row: &[usize]) -> bool {
+    let numeric = |text: &str| {
+        text.chars().any(|character| character.is_numeric())
+            && !text.chars().any(|character| character.is_alphabetic())
+    };
+    let mut groups = 0usize;
+    let mut numeric_groups = 0usize;
+    let mut start = 0;
+    while start < row.len() {
+        let first = &items[row[start]];
+        let mut group_right = first.x + effective_width(first);
+        let mut group_font_size = first.font_size;
+        let mut all_numeric = numeric(first.text.trim());
+        let mut end = start + 1;
+        while end < row.len() {
+            let item = &items[row[end]];
+            let gap = item.x - group_right;
+            if gap > group_font_size.max(item.font_size) * PAGE_NUMBER_CONTEXT_GAP_EM {
+                break;
+            }
+            group_right = group_right.max(item.x + effective_width(item));
+            group_font_size = group_font_size.max(item.font_size);
+            all_numeric &= numeric(item.text.trim());
+            end += 1;
+        }
+        groups += 1;
+        numeric_groups += usize::from(all_numeric);
+        start = end;
+    }
+    groups >= TABULAR_ROW_MIN_GROUPS && numeric_groups >= TABULAR_ROW_MIN_NUMERIC_GROUPS
 }
 
 /// Decide which digit-only page-edge items can be removed before layout.
@@ -1825,6 +1873,64 @@ pub(crate) fn filter_markdown_page_numbers_with_removed_pages(
                 Some(item)
             }
         })
+        .collect();
+    (items, removed_pages, remove)
+}
+
+/// [`filter_markdown_page_numbers_with_removed_pages`] for user-space items
+/// of a whole document, judging each turned page in its own frame.
+///
+/// The folio margin bands (`PAGE_NUMBER_BOTTOM_Y`, `PAGE_NUMBER_TOP_Y`) are
+/// calibrated on an upright US Letter page, y = 0 at the bottom edge and 792
+/// at the top. A page whose frame was turned (see `PageRotation`) has its
+/// lines elsewhere: `(x, y) → (y, -x)` puts a counter-clockwise page at
+/// y ∈ [-x1, -x0] of its visible box, `(x, y) → (-y, x)` a clockwise page at
+/// [x0, x1]. Every item of a counter-clockwise page therefore sat below the
+/// bottom band, so each short integer on it — every cell of a landscape
+/// table — was a folio candidate. Such pages are mapped onto the calibrated
+/// range for the decision only; the returned items keep their coordinates.
+pub(crate) fn filter_markdown_page_numbers_in_page_frames(
+    items: Vec<TextItem>,
+    document_page_count: u32,
+    frames: Option<(&lopdf::Document, &super::PageRotations)>,
+) -> (Vec<TextItem>, HashSet<u32>, Vec<bool>) {
+    let Some((doc, rotations)) = frames.filter(|(_, rotations)| {
+        rotations
+            .values()
+            .any(|&rotation| rotation != super::geometry::PageRotation::Upright)
+    }) else {
+        return filter_markdown_page_numbers_with_removed_pages(items, document_page_count);
+    };
+
+    let page_ids = doc.get_pages();
+    let mut bands: HashMap<u32, Option<(f32, f32)>> = HashMap::new();
+    let mut framed = items.clone();
+    for item in &mut framed {
+        let band = *bands.entry(item.page).or_insert_with(|| {
+            let rotation = rotations.get(&item.page).copied()?;
+            let page_box = page_ids
+                .get(&item.page)
+                .and_then(|&id| super::visible_page_box(doc, id))
+                .unwrap_or(super::PageBox::LETTER);
+            let height = page_box.x1 - page_box.x0;
+            let bottom = match rotation {
+                super::geometry::PageRotation::Ccw => -page_box.x1,
+                super::geometry::PageRotation::Cw => page_box.x0,
+                super::geometry::PageRotation::Upright => return None,
+            };
+            (height > 0.0).then_some((bottom, height))
+        });
+        if let Some((bottom, height)) = band {
+            item.y = (item.y - bottom) * (super::PageBox::LETTER.y1 / height);
+        }
+    }
+
+    let (_, removed_pages, remove) =
+        filter_markdown_page_numbers_with_removed_pages(framed, document_page_count);
+    let items = items
+        .into_iter()
+        .zip(remove.iter().copied())
+        .filter_map(|(item, remove)| (!remove).then_some(item))
         .collect();
     (items, removed_pages, remove)
 }

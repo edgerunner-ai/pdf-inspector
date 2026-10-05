@@ -644,7 +644,7 @@ fn extract_pages_markdown_mem_impl(
             .filter_map(|page| page.checked_add(1))
             .collect()
     });
-    let ((all_items, all_rects, all_lines), page_thresholds, gid_pages, _page_rotations, _) =
+    let ((all_items, all_rects, all_lines), page_thresholds, gid_pages, page_rotations, _) =
         if let Some(required_pages) = required_pages.as_ref() {
             extractor::extract_positioned_text_for_document_analysis(
                 &doc,
@@ -660,7 +660,11 @@ fn extract_pages_markdown_mem_impl(
     // Per-page Markdown receives the original items plus these decisions so
     // table detection can retain legitimate numeric cells.
     let (filtered_items, removed_page_number_pages, page_number_removal_mask) =
-        extractor::filter_markdown_page_numbers_with_removed_pages(all_items.clone(), page_count);
+        extractor::filter_markdown_page_numbers_in_page_frames(
+            all_items.clone(),
+            page_count,
+            Some((&doc, &page_rotations)),
+        );
 
     // Tables need the original numeric cells; columns use folio-cleaned
     // evidence so removed page numbers cannot create false layout metadata.
@@ -4732,7 +4736,7 @@ fn process_document(
             (items, rects, lines),
             page_thresholds,
             gid_encoded_pages,
-            _page_rotations,
+            page_rotations,
             cmap_coverage,
         )) => {
             let mut ocr_reasons_by_page = BTreeMap::new();
@@ -4826,6 +4830,7 @@ fn process_document(
                 items,
                 page_count,
                 options.page_filter.as_ref(),
+                Some((&doc, &page_rotations)),
             );
 
             let text_quality = analyze_text_quality(&items);
@@ -6680,9 +6685,14 @@ fn select_items_with_document_folio_context(
     all_items: Vec<types::TextItem>,
     page_count: u32,
     page_filter: Option<&HashSet<u32>>,
+    frames: Option<(&lopdf::Document, &extractor::PageRotations)>,
 ) -> FolioFilteredItems {
     let (all_layout_items, all_removed_pages, all_removal_mask) =
-        extractor::filter_markdown_page_numbers_with_removed_pages(all_items.clone(), page_count);
+        extractor::filter_markdown_page_numbers_in_page_frames(
+            all_items.clone(),
+            page_count,
+            frames,
+        );
     let selected_page = |page: u32| page_filter.is_none_or(|filter| filter.contains(&page));
 
     let (items, removal_mask) = all_items
@@ -7392,7 +7402,7 @@ mod tests {
         );
 
         let selected =
-            select_items_with_document_folio_context(items, 4, Some(&HashSet::from([1])));
+            select_items_with_document_folio_context(items, 4, Some(&HashSet::from([1])), None);
         assert_eq!(
             selected
                 .removal_mask
