@@ -19,9 +19,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: cargo test
         run: cargo test
+      # Same lints as upstream CI (library targets, default and OCR features).
       - name: cargo clippy
         if: always()
-        run: cargo clippy --all-targets -- -D warnings
+        run: |
+          cargo clippy -- -D warnings
+          cargo clippy --features ocr -- -D warnings
       - name: cargo fmt
         if: always()
         run: cargo fmt --all -- --check
