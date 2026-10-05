@@ -1,4 +1,4 @@
-# Builds pdf-inspector's own Python wheel (Windows x64) at any ref, so
+# Builds pdf-inspector's own Python wheel and the pdf2md CLI (Windows x64) at any ref, so
 # Garrison can compare extraction output between commits without a local
 # Rust toolchain. The upstream workflows are disabled on this fork.
 name: Garrison probe wheel
@@ -27,6 +27,14 @@ jobs:
       - uses: PyO3/maturin-action@v1
         with:
           args: --release --out dist
+      - name: Build pdf2md
+        shell: bash
+        run: cargo build --release --bin pdf2md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pdf2md-${{ inputs.ref }}
+          path: target/release/pdf2md.exe
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: wheel-${{ inputs.ref }}
