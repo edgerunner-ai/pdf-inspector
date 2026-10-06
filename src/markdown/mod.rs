@@ -2011,40 +2011,7 @@ fn convert_items_with_rects_lines_and_table_output(
         //    borders as thin filled rectangles (common in spreadsheet exports).
         //    Only runs when ALL other methods found nothing on this page.
         if !table_output.has_detected_tables_on_page(page) {
-            let page_rects: Vec<&crate::types::PdfRect> =
-                rects.iter().filter(|r| r.page == page).collect();
-            let mut synth_lines: Vec<crate::types::PdfLine> = Vec::new();
-            for r in &page_rects {
-                let (mut w, mut h) = (r.width, r.height);
-                let (mut x, mut y) = (r.x, r.y);
-                if w < 0.0 {
-                    x += w;
-                    w = -w;
-                }
-                if h < 0.0 {
-                    y += h;
-                    h = -h;
-                }
-                if h < 2.0 && w >= 10.0 {
-                    let mid_y = y + h / 2.0;
-                    synth_lines.push(crate::types::PdfLine {
-                        x1: x,
-                        y1: mid_y,
-                        x2: x + w,
-                        y2: mid_y,
-                        page,
-                    });
-                } else if w < 2.0 && h >= 10.0 {
-                    let mid_x = x + w / 2.0;
-                    synth_lines.push(crate::types::PdfLine {
-                        x1: mid_x,
-                        y1: y,
-                        x2: mid_x,
-                        y2: y + h,
-                        page,
-                    });
-                }
-            }
+            let synth_lines = synthesize_thin_rect_rules(rects, page);
             if synth_lines.len() >= 10 {
                 // Chart text stays out of the thin-rect fallback too — a
                 // chart's thin grid rules would otherwise re-grid it.
@@ -2411,8 +2378,136 @@ fn convert_items_with_rects_lines_and_table_output(
     }
 }
 
+/// Rules for the thin-rect border fallback: each thin filled rectangle on
+/// `page` becomes a line along its centre.
+///
+/// Spreadsheet exports often shade the header row (or a column) with a filled
+/// band spanning the whole table instead of drawing a border under it, so its
+/// far edge is the only boundary between the header and the first data row.
+/// Once the thin rules outline a grid, a band at least as wide (or tall) as
+/// that grid contributes its two edges as rules too; a band's near edge
+/// usually coincides with a drawn rule and snaps onto it.
+fn synthesize_thin_rect_rules(
+    rects: &[crate::types::PdfRect],
+    page: u32,
+) -> Vec<crate::types::PdfLine> {
+    let normalized: Vec<(f32, f32, f32, f32)> = rects
+        .iter()
+        .filter(|r| r.page == page)
+        .map(|r| {
+            let (mut x, mut y, mut w, mut h) = (r.x, r.y, r.width, r.height);
+            if w < 0.0 {
+                x += w;
+                w = -w;
+            }
+            if h < 0.0 {
+                y += h;
+                h = -h;
+            }
+            (x, y, w, h)
+        })
+        .collect();
+    let horizontal = |y: f32, x1: f32, x2: f32| crate::types::PdfLine {
+        x1,
+        y1: y,
+        x2,
+        y2: y,
+        page,
+    };
+    let vertical = |x: f32, y1: f32, y2: f32| crate::types::PdfLine {
+        x1: x,
+        y1,
+        x2: x,
+        y2,
+        page,
+    };
+
+    let mut lines = Vec::new();
+    for &(x, y, w, h) in &normalized {
+        if h < 2.0 && w >= 10.0 {
+            lines.push(horizontal(y + h / 2.0, x, x + w));
+        } else if w < 2.0 && h >= 10.0 {
+            lines.push(vertical(x + w / 2.0, y, y + h));
+        }
+    }
+
+    // Grid extent outlined by the thin rules alone.
+    let span = |values: &mut dyn Iterator<Item = (f32, f32)>| {
+        values.fold(None, |extent: Option<(f32, f32)>, (low, high)| {
+            Some(extent.map_or((low, high), |(min, max)| (min.min(low), max.max(high))))
+        })
+    };
+    let grid_x = span(&mut lines.iter().filter(|l| l.y1 == l.y2).map(|l| (l.x1, l.x2)));
+    let grid_y = span(&mut lines.iter().filter(|l| l.x1 == l.x2).map(|l| (l.y1, l.y2)));
+    let (Some((left, right)), Some((bottom, top))) = (grid_x, grid_y) else {
+        return lines;
+    };
+    const BAND_COVERAGE: f32 = 0.9;
+    for &(x, y, w, h) in &normalized {
+        if w < 2.0 || h < 2.0 {
+            continue;
+        }
+        let row_band = w >= (right - left) * BAND_COVERAGE
+            && h < w
+            && y >= bottom - 2.0
+            && y + h <= top + 2.0;
+        let column_band = h >= (top - bottom) * BAND_COVERAGE
+            && w < h
+            && x >= left - 2.0
+            && x + w <= right + 2.0;
+        if row_band {
+            lines.push(horizontal(y, x, x + w));
+            lines.push(horizontal(y + h, x, x + w));
+        } else if column_band {
+            lines.push(vertical(x, y, y + h));
+            lines.push(vertical(x + w, y, y + h));
+        }
+    }
+    lines
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn thin_rect_rules_close_a_shaded_header_band() {
+        use crate::types::PdfRect;
+        let rect = |x: f32, y: f32, width: f32, height: f32| PdfRect {
+            x,
+            y,
+            width,
+            height,
+            page: 1,
+        };
+        // A two-column spreadsheet table: thin rules on the outer border and
+        // between the data rows, and a shaded header band (y 480..500) whose
+        // lower edge is the only boundary under the header.
+        let mut rects = vec![
+            rect(100.0, 500.0, 200.0, 0.5),
+            rect(100.0, 470.0, 200.0, 0.5),
+            rect(100.0, 460.0, 200.0, 0.5),
+            rect(100.0, 460.0, 0.5, 40.0),
+            rect(200.0, 460.0, 0.5, 40.0),
+            rect(300.0, 460.0, 0.5, 40.0),
+            rect(100.0, 480.0, 200.0, 20.0),
+        ];
+        let horizontal_ys = |rects: &[PdfRect]| {
+            let mut ys: Vec<f32> = super::synthesize_thin_rect_rules(rects, 1)
+                .iter()
+                .filter(|line| line.y1 == line.y2)
+                .map(|line| line.y1)
+                .collect();
+            ys.sort_by(|a, b| a.total_cmp(b));
+            ys
+        };
+
+        assert_eq!(horizontal_ys(&rects), [460.25, 470.25, 480.0, 500.0, 500.25]);
+
+        // A small filled box (a cell highlight) adds nothing.
+        rects.pop();
+        rects.push(rect(110.0, 462.0, 40.0, 6.0));
+        assert_eq!(horizontal_ys(&rects), [460.25, 470.25, 500.25]);
+    }
+
     use super::*;
     use analysis::detect_header_level;
     use classify::{is_code_like, is_list_item};
