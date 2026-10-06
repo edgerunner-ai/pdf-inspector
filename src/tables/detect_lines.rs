@@ -17,6 +17,10 @@ const RULE_JOIN_GAP: f32 = 6.0;
 const RULE_SPAN_TOLERANCE: f32 = 8.0;
 const TEXT_ROW_TOLERANCE: f32 = 2.5;
 const DENSE_CHART_MIN_VERTICAL_EDGES: usize = 27;
+/// Widest ruled-line table, in columns. Matches the rect and heuristic
+/// detectors; denser vertical grids are charts (see
+/// `DENSE_CHART_MIN_VERTICAL_EDGES`).
+const MAX_TABLE_COLUMNS: usize = 25;
 const DENSE_CHART_LABEL_PAD: f32 = 20.0;
 const DENSE_CHART_MAX_SHARED_PANEL_GRIDS: usize = 4;
 
@@ -1906,8 +1910,9 @@ fn detect_tables_from_lines_inner(
         return select_table_hypothesis(Vec::new(), alternatives, page);
     }
 
-    // Cap grid size: >20 columns is almost certainly a diagram, not a table
-    if col_edges.len() > 21 || row_edges.len() > 80 {
+    // Cap grid size: wider grids are diagrams or charts, not tables. Dense
+    // spreadsheet exports (21-column inventory listings) are real tables.
+    if col_edges.len() > MAX_TABLE_COLUMNS + 1 || row_edges.len() > 80 {
         log::debug!(
             "detect_lines p{}: rejected — too many edges ({}x{})",
             page,
@@ -2326,6 +2331,53 @@ mod tests {
         lines.extend((0..6).map(|row| make_hline(400.0 + row as f32 * 30.0, 100.0, 350.0, 1)));
 
         assert!(detect_dense_line_chart_regions(&lines, &[], 1).is_empty());
+    }
+
+    fn ruled_grid(columns: usize, rows: usize) -> (Vec<PdfLine>, Vec<TextItem>) {
+        let width = 30.0;
+        let height = 20.0;
+        let left = 40.0;
+        let top = 700.0;
+        let right = left + columns as f32 * width;
+        let bottom = top - rows as f32 * height;
+        let mut lines: Vec<PdfLine> = (0..=columns)
+            .map(|column| make_vline(left + column as f32 * width, bottom, top, 1))
+            .collect();
+        lines.extend((0..=rows).map(|row| make_hline(top - row as f32 * height, left, right, 1)));
+        let items = (0..rows)
+            .flat_map(|row| {
+                (0..columns).map(move |column| {
+                    make_item(
+                        &format!("r{row}c{column}"),
+                        left + column as f32 * width + 3.0,
+                        top - row as f32 * height - 12.0,
+                        1,
+                    )
+                })
+            })
+            .collect();
+        (lines, items)
+    }
+
+    #[test]
+    fn wide_spreadsheet_grid_up_to_25_columns_is_a_table() {
+        // A 21-column inventory listing (spreadsheet export) was rejected by
+        // a 20-column cap that the rect and heuristic detectors do not have.
+        for columns in [21, 25] {
+            let (lines, items) = ruled_grid(columns, 4);
+
+            let tables = detect_tables_from_lines(&items, &lines, 1);
+
+            assert_eq!(tables.len(), 1, "{columns} columns");
+            assert_eq!(tables[0].cells[0].len(), columns, "{columns} columns");
+        }
+    }
+
+    #[test]
+    fn grid_wider_than_25_columns_is_not_a_table() {
+        let (lines, items) = ruled_grid(26, 4);
+
+        assert!(detect_tables_from_lines(&items, &lines, 1).is_empty());
     }
 
     #[test]
