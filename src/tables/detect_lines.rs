@@ -2338,19 +2338,29 @@ mod tests {
         let height = 20.0;
         let left = 40.0;
         let top = 700.0;
+        // A taller header row, like a spreadsheet export: perfectly even rows
+        // read as chart gridlines (see the row-spacing check).
+        let header = 40.0;
+        let row_top = |row: usize| {
+            if row == 0 {
+                top
+            } else {
+                top - header - (row - 1) as f32 * height
+            }
+        };
         let right = left + columns as f32 * width;
-        let bottom = top - rows as f32 * height;
+        let bottom = row_top(rows);
         let mut lines: Vec<PdfLine> = (0..=columns)
             .map(|column| make_vline(left + column as f32 * width, bottom, top, 1))
             .collect();
-        lines.extend((0..=rows).map(|row| make_hline(top - row as f32 * height, left, right, 1)));
+        lines.extend((0..=rows).map(|row| make_hline(row_top(row), left, right, 1)));
         let items = (0..rows)
             .flat_map(|row| {
                 (0..columns).map(move |column| {
                     make_item(
                         &format!("r{row}c{column}"),
                         left + column as f32 * width + 3.0,
-                        top - row as f32 * height - 12.0,
+                        row_top(row) - 12.0,
                         1,
                     )
                 })
