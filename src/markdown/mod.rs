@@ -2447,14 +2447,10 @@ fn synthesize_thin_rect_rules(
         if w < 2.0 || h < 2.0 {
             continue;
         }
-        let row_band = w >= (right - left) * BAND_COVERAGE
-            && h < w
-            && y >= bottom - 2.0
-            && y + h <= top + 2.0;
-        let column_band = h >= (top - bottom) * BAND_COVERAGE
-            && w < h
-            && x >= left - 2.0
-            && x + w <= right + 2.0;
+        let row_band =
+            w >= (right - left) * BAND_COVERAGE && h < w && y >= bottom - 2.0 && y + h <= top + 2.0;
+        let column_band =
+            h >= (top - bottom) * BAND_COVERAGE && w < h && x >= left - 2.0 && x + w <= right + 2.0;
         if row_band {
             lines.push(horizontal(y, x, x + w));
             lines.push(horizontal(y + h, x, x + w));
@@ -2500,7 +2496,10 @@ mod tests {
             ys
         };
 
-        assert_eq!(horizontal_ys(&rects), [460.25, 470.25, 480.0, 500.0, 500.25]);
+        assert_eq!(
+            horizontal_ys(&rects),
+            [460.25, 470.25, 480.0, 500.0, 500.25]
+        );
 
         // A small filled box (a cell highlight) adds nothing.
         rects.pop();
