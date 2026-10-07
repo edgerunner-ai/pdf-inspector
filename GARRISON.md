@@ -10,7 +10,7 @@ This branch is upstream pdf-inspector **1.25.2** plus fixes used by [Garrison](h
 | `823a7c1` (+ `814669a` test fixture) | Ruled-line tables up to 25 columns (`MAX_TABLE_COLUMNS`), like the rect and heuristic detectors; the cap was 20. |
 | `ca73bdc` (+ `69e35cc` rustfmt) | Thin-rect table fallback: a filled band spanning the grid (shaded header row or column) contributes its edges as rules, so the header no longer absorbs the first data row. |
 
-Each has unit tests. Garrison's `garrison/tests/fixtures/capuldi_2024_p22_landscape_table.pdf` exercises all three.
+Each has unit tests. All three were found on page 22 of `CAPULDI_2024.pdf` (a public DoD ammunition guide), which exercises all of them.
 
 ## Fork-only tooling
 
@@ -20,4 +20,4 @@ Each has unit tests. Garrison's `garrison/tests/fixtures/capuldi_2024_p22_landsc
 
 ## Updating
 
-Rebase this branch onto the new upstream release tag, drop any fix that upstream now covers, and check that the Garrison tests above still pass. Then update the `[patch.crates-io]` rev in the anydoc fork.
+Rebase this branch onto the new upstream release tag, drop any fix that upstream now covers, and check that the tests still pass and that CAPULDI page 22 still converts to one 21-column table. Then update the `[patch.crates-io]` rev in the anydoc fork.
